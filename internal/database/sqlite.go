@@ -16,24 +16,37 @@ type SQLite struct {
 }
 
 func NewSQLite() (*SQLite, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	dir := filepath.Dir(path)
+	var dbPath string
 
-	dbPath := filepath.Join(dir, "rss.db")
+	if customPath := os.Getenv("RSS_DB_PATH"); customPath != "" {
+		dbPath = customPath
+	} else {
+		if isDev() {
+			// 開發環境：使用工作目錄
+			wd, err := os.Getwd()
+			if err != nil {
+				return nil, err
+			}
+			dbPath = filepath.Join(wd, "rss.db")
+		} else {
+			// 生產環境：使用執行檔目錄或用戶目錄
+			path, err := os.Executable()
+			if err != nil {
+				return nil, err
+			}
+			dir := filepath.Dir(path)
+			dbPath = filepath.Join(dir, "rss.db")
 
-	if _, err := os.Stat(dir); os.IsPermission(err) {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		dbPath = filepath.Join(homeDir, ".rss-reader", "rss.db")
-
-		// 創建目錄
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-			return nil, err
+			if !canWrite(dir) {
+				homeDir, err := os.UserHomeDir()
+				if err != nil {
+					return nil, err
+				}
+				dbPath = filepath.Join(homeDir, ".rss-reader", "rss.db")
+				if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
@@ -48,6 +61,23 @@ func NewSQLite() (*SQLite, error) {
 	}
 
 	return s, nil
+}
+
+func isDev() bool {
+	if _, err := os.Stat("go.mod"); err == nil {
+		return true
+	}
+	return os.Getenv("GO_ENV") == "development"
+}
+
+func canWrite(dir string) bool {
+	testFile := filepath.Join(dir, ".write_test")
+	if f, err := os.Create(testFile); err == nil {
+		f.Close()
+		os.Remove(testFile)
+		return true
+	}
+	return false
 }
 
 func (s *SQLite) create() error {
@@ -73,11 +103,18 @@ func (s *SQLite) create() error {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+		CREATE TABLE IF NOT EXISTS data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url key UNIQUE NOT NULL,
+        url value UNIQUE NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_news_url ON news(url);
     CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at);
     CREATE INDEX IF NOT EXISTS idx_news_source ON news(source);
     CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
     CREATE INDEX IF NOT EXISTS idx_feeds_dismiss ON feeds(dismiss);
+    CREATE INDEX IF NOT EXISTS idx_data_key ON data(key);
     `
 
 	_, err := s.db.Exec(query)
@@ -271,6 +308,35 @@ func (s *SQLite) GetFeed() ([]string, error) {
 	}
 
 	return feeds, nil
+}
+
+func (s *SQLite) GetKey(key string) (string, error) {
+	query := `
+	SELECT value
+	FROM data 
+	WHERE key = ?`
+
+	var value string
+	err := s.db.QueryRow(query, key).Scan(&value)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func (s *SQLite) SetKey(key, value string) error {
+	query := `
+	INSERT OR REPLACE INTO data (
+		key, 
+		value
+	)
+	VALUES (
+		?, 
+		?
+	)`
+
+	_, err := s.db.Exec(query, strings.TrimSpace(key), strings.TrimSpace(value))
+	return err
 }
 
 func (s *SQLite) Close() error {

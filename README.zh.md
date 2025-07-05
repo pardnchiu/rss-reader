@@ -1,6 +1,6 @@
 # RSS 閱讀器
 
-> 一個基於終端介面的 RSS 新聞聚合器，支援多新聞源、內容萃取、本地儲存和智慧概覽（後續添加）功能。
+> 一個基於終端介面的 RSS 新聞聚合器，支援多新聞源、內容萃取、本地儲存和智慧概覽功能。
 
 [![license](https://img.shields.io/github/license/pardnchiu/rss-reader)](LICENSE)
 [![version](https://img.shields.io/github/v/tag/pardnchiu/rss-reader)](https://github.com/pardnchiu/rss-reader/releases)
@@ -42,14 +42,15 @@ add https://example.com/rss.xml
 remove https://example.com/rss.xml
 rm https://example.com/rss.xml
 
-# 列出所有訂閱源
-list
+apikey your-api-key
+
+# 列出 api key 與訂閱源
+config
 ```
 
 ## 即將推出
 
 ### LLM 智慧概覽
-- **24小時新聞摘要**: AI 生成當日重要新聞概覽
 - **趨勢分析**: 識別熱門話題和新聞趨勢
 
 ## RSS 推薦

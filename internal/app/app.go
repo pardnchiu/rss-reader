@@ -5,9 +5,11 @@ import (
 	"log"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
+	"rss-reader/internal/api"
 	"rss-reader/internal/database"
 	"rss-reader/internal/model"
 	"rss-reader/internal/util"
@@ -54,6 +56,7 @@ func New() *App {
 }
 
 func (a *App) frame() {
+
 	a.status = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
@@ -69,7 +72,6 @@ func (a *App) frame() {
 		}
 	})
 
-	// 後續要添加 llm 分析
 	a.llmView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
@@ -77,10 +79,15 @@ func (a *App) frame() {
 	a.llmView.SetBorder(true).
 		SetTitle("Summary").
 		SetTitleAlign(tview.AlignLeft)
+	summary, _ := a.database.GetKey("summary")
+	if summary != "" {
+		a.llmView.SetText(summary).ScrollToBeginning()
+	}
 
 	leftView := tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(a.list, 0, 1, true)
+		AddItem(a.llmView, 0, 1, true).
+		AddItem(a.list, 18, 0, true)
 
 	a.preview = tview.NewTextView().
 		SetDynamicColors(true).
@@ -143,7 +150,8 @@ func (a *App) listener() {
 			} else if a.app.GetFocus() == a.preview {
 				a.app.SetFocus(a.input)
 			} else if a.app.GetFocus() == a.input {
-				// a.app.SetFocus(a.llmView)
+				a.app.SetFocus(a.llmView)
+			} else {
 				a.app.SetFocus(a.list)
 			}
 			return nil
@@ -199,7 +207,19 @@ func (a *App) command(command string) {
 		a.showCommand(fmt.Sprintf("Remove RSS: %s", url))
 		a.showFeedList()
 
-	case "list":
+	case "apikey":
+		if len(parts) < 2 {
+			a.showCommand("apikey [API_KEY]")
+			return
+		}
+		key := parts[1]
+		if err := a.database.SetKey("apikey", key); err != nil {
+			a.showCommand(fmt.Sprintf("Failed to set API key: %v", err))
+			return
+		}
+		a.showCommand("API key set successfully.")
+
+	case "config":
 		a.showFeedList()
 
 	default:
@@ -219,7 +239,12 @@ func (a *App) showFeedList() {
 		return
 	}
 
-	result := "RSS feed list:\n"
+	key, _ := a.database.GetKey("apikey")
+	if key == "" {
+		key = "Not set"
+	}
+
+	result := fmt.Sprintf("API Key: %s\n\n%s\n", key, "RSS feed list:")
 	for i, feed := range feeds {
 		result += fmt.Sprintf("%d. %s\n", i+1, feed)
 	}
@@ -248,16 +273,10 @@ func (a *App) getList(isRefresh bool) {
 	}
 
 	go func() {
-		var articles = a.articles
-		storedArticles, err := a.database.Get(72)
-		storedMap := make(map[string]model.News)
-
+		// 1. 如果列表為空，先從資料庫載入
 		if len(a.articles) < 1 {
+			storedArticles, err := a.database.Get(72)
 			if err == nil && len(storedArticles) > 0 {
-				for _, stored := range storedArticles {
-					storedMap[stored.URL] = stored
-				}
-
 				a.app.QueueUpdateDraw(func() {
 					a.articles = storedArticles
 					a.filteredArticles = a.articles
@@ -267,7 +286,8 @@ func (a *App) getList(isRefresh bool) {
 			}
 		}
 
-		articles, err = a.collector.GetNews()
+		// 2. 從 RSS 獲取新文章
+		newArticles, err := a.collector.GetNews()
 		if err != nil {
 			a.app.QueueUpdateDraw(func() {
 				a.updateStatus(fmt.Sprintf("Failed to get news list: %v", err))
@@ -275,39 +295,45 @@ func (a *App) getList(isRefresh bool) {
 			return
 		}
 
-		mergedArticles := make([]model.News, 0)
-		for _, article := range articles {
-			if stored, exists := storedMap[article.URL]; exists {
+		// 3. 檢查並插入資料庫中沒有的文章
+		newCount := 0
+		finalArticles := make([]model.News, 0)
+
+		for _, article := range newArticles {
+			stored, err := a.database.GetFromURL(article.URL)
+			if err != nil {
+				// 資料庫沒有這篇文章，計入新文章
+				newCount++
+				finalArticles = append(finalArticles, article)
+			} else {
+				// 使用資料庫中的發布時間
 				article.PublishedAt = stored.PublishedAt
+				finalArticles = append(finalArticles, article)
 			}
-			mergedArticles = append(mergedArticles, article)
 		}
 
-		newCount := a.count(articles)
-		go a.loadContent(articles)
+		// 按發布時間排序 (新到舊)
+		sort.Slice(finalArticles, func(i, j int) bool {
+			return finalArticles[i].PublishedAt.After(finalArticles[j].PublishedAt)
+		})
 
+		// 4. 非同步載入新文章的完整內容
+		if newCount > 0 {
+			go a.loadContent(finalArticles)
+		}
+
+		// 5. 更新 UI
 		a.app.QueueUpdateDraw(func() {
-			a.articles = articles
-			a.filteredArticles = articles
+			a.articles = finalArticles
+			a.filteredArticles = finalArticles
 			a.updateList()
 			if newCount > 0 {
-				a.updateStatus(fmt.Sprintf("Found %d news, getting full content...", newCount))
+				a.updateStatus(fmt.Sprintf("Found %d new articles, getting full content...", newCount))
 			} else {
 				a.updateStatus("All news are up to date.")
 			}
 		})
 	}()
-}
-
-func (a *App) count(news []model.News) int {
-	newCount := 0
-	for _, article := range news {
-		_, err := a.database.GetFromURL(article.URL)
-		if err != nil {
-			newCount++
-		}
-	}
-	return newCount
 }
 
 func (a *App) loadContent(news []model.News) {
@@ -341,6 +367,93 @@ func (a *App) loadContent(news []model.News) {
 
 	a.app.QueueUpdateDraw(func() {
 		a.updateStatus("All news are up to date")
+
+		key, _ := a.database.GetKey("apikey")
+		if key != "" {
+			api.ApiKey = key
+		}
+		summary, _ := a.database.GetKey("summary")
+		systemPrompt := strings.TrimSpace(
+			fmt.Sprintf(`=== 系統資訊 ===
+當前時間：%s
+作業系統與執行環境：%s
+
+=== 指令說明 ===
+你是專業的新聞概要整理助手。請根據輸入的新聞內容（標題、日期、完整內容）提取重點，生成結構化的本日概要並分析趨勢。
+
+=== 輸出格式要求 ===
+使用繁體中文，按以下順序組織內容：
+
+## 重大要聞
+- 國際局勢、政府政策、重大社會事件
+- 保留詳細資訊，避免過度壓縮
+- 標註時間與影響程度
+
+## 科技與金融
+- 科技趨勢、市場動向、經濟指標
+- 重點關注創新技術與投資機會
+- 標註相關股市或產業影響
+
+## 生活資訊
+- 天氣預報、交通狀況、消費資訊
+- 健康醫療、教育文化相關消息
+
+## 趨勢分析
+- 對比前次概要，標註變化趨勢
+- 識別持續發展或新興話題
+- 預測可能後續發展
+
+=== 處理原則 ===
+1. 盡可能地保留舊有概要內容（包含24小時內、重大消息）
+2. 依新聞重要性與時效性排序
+3. 盡可能從相近新聞中補充細節
+4. 保留數據、時間、人名等關鍵細節
+5. 標註消息來源可信度
+6. 突出與前次概要的差異變化
+
+
+=== 前次概要 ===
+%s`,
+				time.Now().Format("2006年01月02日 15:04:05"),
+				runtime.GOOS+"/"+runtime.GOARCH,
+				summary,
+			),
+		)
+		messages := []api.Message{
+			{
+				Role:    "system",
+				Content: systemPrompt,
+			},
+		}
+
+		if summary == "" {
+			arr, _ := a.database.Get(24)
+			sort.Slice(arr, func(i, j int) bool {
+				return arr[i].PublishedAt.After(arr[j].PublishedAt)
+			})
+
+			for _, item := range arr {
+				messages = append(messages, api.Message{
+					Role:    "user",
+					Content: fmt.Sprintf("Title: %s\nSource: %s\nPublishedAt: %s\nContent: %s", item.Title, item.Source, item.PublishedAt.Local().Format("2006-01-02 15:04"), item.Content),
+				})
+			}
+		}
+
+		for _, item := range news {
+			messages = append(messages, api.Message{
+				Role:    "user",
+				Content: fmt.Sprintf("Title: %s\nSource: %s\nPublishedAt: %s\nContent: %s", item.Title, item.Source, item.PublishedAt.Local().Format("2006-01-02 15:04"), item.Content),
+			})
+		}
+
+		summary, err := api.AskWithSmallModel(messages)
+		if err != nil {
+			a.llmView.SetText(err.Error()).ScrollToBeginning()
+			return
+		}
+		a.database.SetKey("summary", summary)
+		a.llmView.SetText(summary).ScrollToBeginning()
 	})
 }
 

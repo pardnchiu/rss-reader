@@ -1,6 +1,6 @@
 # RSS Reader
 
-> A terminal-based RSS news aggregator with multi-source support, content extraction, local storage, and intelligent overview features (coming soon).
+> A terminal-based RSS news aggregator with multi-source support, content extraction, local storage, and intelligent overview features.
 
 [![license](https://img.shields.io/github/license/pardnchiu/rss-reader)](LICENSE)
 [![version](https://img.shields.io/github/v/tag/pardnchiu/rss-reader)](https://github.com/pardnchiu/rss-reader/releases)
@@ -42,14 +42,15 @@ add https://example.com/rss.xml
 remove https://example.com/rss.xml
 rm https://example.com/rss.xml
 
-# List all feeds
-list
+apikey your-api-key
+
+# Show api key and feeds
+config
 ```
 
 ## Coming Soon
 
 ### LLM Smart Overview
-- **24-Hour News Summary**: AI-generated daily important news overview
 - **Trend Analysis**: Identify trending topics and news patterns
 
 ## RSS Recommendations
