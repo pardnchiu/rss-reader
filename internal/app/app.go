@@ -180,13 +180,13 @@ func (a *App) command(command string) {
 
 	switch cmd {
 	case "add":
-		if len(parts) < 7 {
+		if len(parts) < 2 {
 			a.showCommand("add [URL]")
 			return
 		}
 		url := parts[1]
 		a.collector.Add(url)
-		a.showCommand(fmt.Sprintf("Add RSS: %s", url))
+		a.showCommand(fmt.Sprintf("Add RSS: %s", cmd))
 		a.showFeedList()
 
 	case "rm", "remove":
