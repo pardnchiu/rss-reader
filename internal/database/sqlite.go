@@ -105,8 +105,8 @@ func (s *SQLite) create() error {
 
 		CREATE TABLE IF NOT EXISTS data (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url key UNIQUE NOT NULL,
-        url value UNIQUE NOT NULL
+        key TEXT UNIQUE NOT NULL,
+        value TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_news_url ON news(url);
